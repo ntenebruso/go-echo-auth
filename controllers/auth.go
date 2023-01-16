@@ -4,6 +4,7 @@ import (
 	"app/models"
 	"app/utils"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,7 @@ func (AuthController) Login(c echo.Context) error {
 	var user models.User;
 
 	if err := c.Bind(&user); err != nil {
-		return c.JSON(http.StatusBadRequest, echo.Map{"message": "field missing"})
+		return c.JSON(http.StatusBadRequest, echo.Map{"message": "invalid JSON"})
 	}
 
 	if (strings.TrimSpace(user.Email) == "" || strings.TrimSpace(user.Password) == "") {
@@ -30,15 +31,10 @@ func (AuthController) Login(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, echo.Map{"message": "incorrect email or password"})
 	}
 
-	claims := &models.JWTUserClaim{
-		ID: foundUser.ID,
-		Email: foundUser.Email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 72)),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Issuer: strconv.Itoa(int(foundUser.ID)),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 72)),
+	})
 
 	t, err := token.SignedString([]byte("secret"))
 
@@ -47,7 +43,8 @@ func (AuthController) Login(c echo.Context) error {
 	}
 
 	cookie := new(http.Cookie)
-	cookie.Name = "user"
+	cookie.Name = "jwt"
+	cookie.Path = "/"
 	cookie.Value = t
 	cookie.Expires = time.Now().Add(time.Hour * 72)
 	cookie.HttpOnly = true
@@ -78,8 +75,7 @@ func (AuthController) Signup(c echo.Context) error {
 
 func (AuthController) Logout(c echo.Context) error {
 	cookie := new(http.Cookie)
-	cookie.Name = "user"
-	cookie.Value = ""
+	cookie.Name = "jwt"
 	cookie.Expires = time.Now().Add(time.Hour * -1)
 	cookie.HttpOnly = true
 	c.SetCookie(cookie)
@@ -88,7 +84,11 @@ func (AuthController) Logout(c echo.Context) error {
 }
 
 func (AuthController) User(c echo.Context) error {
-	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*models.JWTUserClaim)
-	return c.JSON(http.StatusOK, echo.Map{"user": claims})
+	uid := c.Get("uid")
+
+	var user models.User;
+
+	utils.DB.Where("id = ?", uid).Select("id", "email").First(&user)
+
+	return c.JSON(http.StatusOK, echo.Map{"user": user})
 }
