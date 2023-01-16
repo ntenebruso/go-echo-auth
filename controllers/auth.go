@@ -10,29 +10,36 @@ import (
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthController struct {}
 
 func (AuthController) Login(c echo.Context) error {
-	var user models.User;
+	var data map[string]string
 
-	if err := c.Bind(&user); err != nil {
+	if err := c.Bind(&data); err != nil {
 		return c.JSON(http.StatusBadRequest, echo.Map{"message": "invalid JSON"})
 	}
 
-	if (strings.TrimSpace(user.Email) == "" || strings.TrimSpace(user.Password) == "") {
+	if strings.TrimSpace(data["email"]) == "" || strings.TrimSpace(data["password"]) == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"message": "blank email or password"})
 	}
 
-	var foundUser models.User;
+	var user models.User;
 
-	if err := utils.DB.Where("email = ? AND password = ?", user.Email, user.Password).First(&foundUser).Error; err != nil {
-		return c.JSON(http.StatusUnauthorized, echo.Map{"message": "incorrect email or password"})
+	result := utils.DB.Where("email = ?", data["email"]).First(&user)
+
+	if result.Error != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"message": "email not found"})
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["password"])); err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"message": "invalid password"})
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Issuer: strconv.Itoa(int(foundUser.ID)),
+		Issuer: strconv.Itoa(int(user.ID)),
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 72)),
 	})
 
@@ -54,14 +61,25 @@ func (AuthController) Login(c echo.Context) error {
 }
 
 func (AuthController) Signup(c echo.Context) error {
-	var user models.User;
+	var data map[string]string
 
-	if err := c.Bind(&user); err != nil {
-		return c.JSON(http.StatusBadRequest, echo.Map{"message": "field missing"})
+	if err := c.Bind(&data); err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"message": "invalid JSON"})
 	}
 
-	if (strings.TrimSpace(user.Email) == "" || strings.TrimSpace(user.Password) == "") {
+	if strings.TrimSpace(data["email"]) == "" || strings.TrimSpace(data["password"]) == "" {
 		return c.JSON(http.StatusBadRequest, echo.Map{"message": "blank email or password"})
+	}
+
+	hashedPwd, err := bcrypt.GenerateFromPassword([]byte(data["password"]), bcrypt.DefaultCost)
+
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, echo.Map{"message": "error encrypting password"})
+	}
+
+	user := models.User{
+		Email: data["email"],
+		Password: string(hashedPwd),
 	}
 
 	result := utils.DB.Create(&user)
@@ -76,6 +94,7 @@ func (AuthController) Signup(c echo.Context) error {
 func (AuthController) Logout(c echo.Context) error {
 	cookie := new(http.Cookie)
 	cookie.Name = "jwt"
+	cookie.Path = "/"
 	cookie.Expires = time.Now().Add(time.Hour * -1)
 	cookie.HttpOnly = true
 	c.SetCookie(cookie)
